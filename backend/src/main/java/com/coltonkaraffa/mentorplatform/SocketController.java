@@ -17,6 +17,7 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 
 import java.io.IOException;
 import java.net.URI;
+import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
@@ -68,7 +69,10 @@ record OnlineStatusResponse(
 
 @Configuration
 @EnableWebSocket
-public class MessagingController implements WebSocketConfigurer {
+public class SocketController implements WebSocketConfigurer {
+
+    private final UserRepository userRepository;
+
     private final ObjectMapper objectMapper =
         new ObjectMapper().findAndRegisterModules();
 
@@ -82,7 +86,9 @@ public class MessagingController implements WebSocketConfigurer {
 
     Map<String, Instant> lastPong = new ConcurrentHashMap<>();
 
-    public MessagingController() {
+    public SocketController(UserRepository userRepository) {
+        this.userRepository = userRepository;
+
         scheduler.scheduleAtFixedRate(
             () -> {
                 System.out.println(
@@ -267,7 +273,7 @@ public class MessagingController implements WebSocketConfigurer {
                 }
             }
 
-            private void handleChat(SendMessageRequest request) throws IOException {
+            private void handleChat(SendMessageRequest request) throws IOException, SQLException {
                 ChatMessage chatMessage = new ChatMessage(
                     UUID.randomUUID().toString(),
                     "MESSAGE_RECEIVED",
@@ -300,6 +306,8 @@ public class MessagingController implements WebSocketConfigurer {
                         }
                     }
                 }
+
+                userRepository.insertMessage(request.senderId(), request.receiverId(), request.content());
             }
 
             private boolean isUserOnline(String userId) {
