@@ -1,8 +1,9 @@
 "use client";
 
+import { getUid } from "@/lib/auth";
 import { ChatMessage, useSocket } from "@/providers/SocketProvider";
 import { usePathname, useSearchParams } from "next/navigation";
-import { useEffect } from "react";
+import { RefObject, useEffect, useRef } from "react";
 import { toast, Toaster } from "sonner";
 
 function MessageToast({ message }: { message: ChatMessage }) {
@@ -14,20 +15,59 @@ function MessageToast({ message }: { message: ChatMessage }) {
   );
 }
 
+let mainAudioBuffer: AudioBuffer | null = null;
+
+async function playNotificationSound(
+  audioCtxRef: RefObject<AudioContext | null>,
+) {
+  if (!audioCtxRef.current) return;
+
+  if (!mainAudioBuffer) {
+    const response = await fetch("/notification.wav", {
+      cache: "force-cache",
+    });
+
+    const arrayBuffer = await response.arrayBuffer();
+    const audioBuffer = await audioCtxRef.current.decodeAudioData(arrayBuffer);
+
+    mainAudioBuffer = audioBuffer;
+  }
+
+  const source = audioCtxRef.current.createBufferSource();
+  if (!source || !mainAudioBuffer) return;
+
+  const gainNode = audioCtxRef.current.createGain();
+  gainNode.gain.value = 0.25;
+
+  source.buffer = mainAudioBuffer;
+  source.connect(gainNode);
+  gainNode.connect(audioCtxRef.current.destination);
+  source.start(0);
+}
+
 export default function MessageNotification() {
-  const { onMessage, myId } = useSocket();
+  const uid = getUid();
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  const socket = useSocket();
 
   const searchParams = useSearchParams();
   const pathname = usePathname();
 
   useEffect(() => {
-    const cleanup = onMessage((item) => {
-      const receiverId = searchParams.get("receiverId");
+    audioCtxRef.current = new window.AudioContext();
+  }, []);
+
+  useEffect(() => {
+    const cleanup = socket.onMessage((item) => {
+      const conversationId = searchParams.get("conversationId");
 
       const isViewingConversation =
-        pathname === "/messages" && receiverId === item.senderId;
+        pathname === "/messages" && conversationId === item.conversationId;
 
-      if (item.senderId === myId || isViewingConversation) return;
+      if (item.senderId === uid || isViewingConversation) return;
+
+      playNotificationSound(audioCtxRef);
 
       toast.custom(() => <MessageToast message={item} />, {
         duration: 5000,
@@ -36,7 +76,7 @@ export default function MessageNotification() {
     });
 
     return cleanup;
-  }, [myId, pathname, searchParams]);
+  }, [uid, pathname, searchParams, socket]);
 
   return (
     <Toaster

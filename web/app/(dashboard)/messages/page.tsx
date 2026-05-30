@@ -4,88 +4,268 @@ import clsx from "clsx";
 import { SubmitEvent, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChatMessage, useSocket } from "@/providers/SocketProvider";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import React from "react";
+import { getUid } from "@/lib/auth";
 
 export default function Page() {
-  const {
-    myId,
-    connectionLost,
-    failedCount,
-    otherTyping,
-    sendMessage,
-    sendTyping,
-    queryOnlineStatus,
-    onlineUUIDs,
-    instantHideTyping,
-    setInstantHideTyping,
-    onMessage,
-    onOpen,
-  } = useSocket();
+  const socket = useSocket();
 
-  const [content, setContent] = useState("");
-
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-
-  const [previousMessaged, setPreviouslyMessaged] = useState<string[]>([]);
-
-  const searchParams = useSearchParams();
-  const receiverId = searchParams.get("receiverId") || "NONE";
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const forceScrollAfterFetchRef = useRef(false);
+  const [allConversations, setAllConversations] = useState<
+    { id: string; lastMessageId: string; name: string; createdAt: string }[]
+  >([]);
+  const [openConversation, setOpenConversation] = useState<{
+    id: string;
+    lastMessageId: string;
+    name: string;
+    createdAt: string;
+  } | null>(null);
 
   useEffect(() => {
-    const previouslyMessaged: string[] = JSON.parse(
-      sessionStorage.getItem("previouslyMessaged") || "[]",
-    );
-    if (!previouslyMessaged.includes(receiverId)) {
-      previouslyMessaged.push(receiverId);
-      sessionStorage.setItem(
-        "previouslyMessaged",
-        JSON.stringify(previouslyMessaged),
+    async function fetchConversations() {
+      const response = await fetch(
+        `http://${window.location.hostname}:8080/api/conversation`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${getUid()}`,
+          },
+        },
       );
+
+      if (!response.ok) {
+        setAllConversations([]);
+        return;
+      }
+
+      const output = await response.json();
+      console.log("CONVOS:", output);
+      setAllConversations(output);
     }
 
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPreviouslyMessaged(previouslyMessaged);
-  }, [receiverId]);
+    fetchConversations();
 
-  useEffect(() => {
-    if (!myId) return;
-
-    const cleanup = onMessage((message) => {
-      if (message.senderId === receiverId || message.senderId === myId) {
-        setMessages((prev) => [...prev, message]);
-      }
-      if (
-        myId !== message.senderId &&
-        !previousMessaged.includes(message.senderId)
-      ) {
-        setPreviouslyMessaged((prev) => [...prev, message.senderId]);
-        sessionStorage.setItem(
-          "previouslyMessaged",
-          JSON.stringify(previousMessaged),
-        );
-      }
+    const cleanup = socket.onConversationCreated((data) => {
+      setAllConversations((prev) => [data, ...prev]);
     });
 
     return cleanup;
-  }, [myId, previousMessaged]);
+  }, [socket]);
+
+  // useEffect(() => {
+  //   const previouslyMessaged: string[] = JSON.parse(
+  //     sessionStorage.getItem("previouslyMessaged") || "[]",
+  //   );
+  //   if (!previouslyMessaged.includes(receiverId)) {
+  //     previouslyMessaged.push(receiverId);
+  //     sessionStorage.setItem(
+  //       "previouslyMessaged",
+  //       JSON.stringify(previouslyMessaged),
+  //     );
+  //   }
+
+  //   // eslint-disable-next-line react-hooks/set-state-in-effect
+  //   setPreviouslyMessaged(previouslyMessaged);
+  // }, [receiverId]);
+
+  // useEffect(() => {
+  //   const uid = getUid();
+  //   if (!uid) return;
+
+  //   const cleanup = socket.onMessage((message) => {
+  //     if (message.senderId === receiverId || message.senderId === uid) {
+  //       setMessages((prev) => [...prev, message]);
+  //     }
+  //     if (
+  //       uid !== message.senderId &&
+  //       !previousMessaged.includes(message.senderId)
+  //     ) {
+  //       setPreviouslyMessaged((prev) => [...prev, message.senderId]);
+  //       sessionStorage.setItem(
+  //         "previouslyMessaged",
+  //         JSON.stringify(previousMessaged),
+  //       );
+  //     }
+  //   });
+
+  //   return cleanup;
+  // }, [previousMessaged]);
+
+  // useEffect(() => {
+
+  //   const uid = getUid();
+  //   if (!uid || !openConversationId) return;
+
+  //   fetchMessages(uid, openConversationId);
+
+  //   const cleanup = socket.onOpen(() => {
+  //     fetchMessages(uid, openConversationId);
+  //     socket.queryOnlineStatus([openConversationId]);
+  //   });
+
+  //   return cleanup;
+  // }, []);
+
+  // useEffect(() => {
+  //   if (!forceScrollAfterFetchRef.current) return;
+
+  //   requestAnimationFrame(() => {
+  //     scrollRef.current?.scrollTo({
+  //       top: scrollRef.current.scrollHeight,
+  //     });
+
+  //     forceScrollAfterFetchRef.current = false;
+  //   });
+  // }, [messages]);
+
+  // useEffect(() => {
+  //   const uid = getUid();
+  //   if (!uid || !openConversationId) return;
+  //   socket.queryOnlineStatus([openConversationId]);
+
+  //   const requeryUserStatus = setInterval(() => {
+  //     socket.queryOnlineStatus([receiverId]);
+  //   }, 5000);
+
+  //   return () => clearInterval(requeryUserStatus);
+  // }, []);
+
+  // useEffect(() => {
+  //   const lastMessage = messages.at(-1);
+
+  //   if (!lastMessage || !scrollRef.current) return;
+
+  //   const el = scrollRef.current;
+
+  //   const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+
+  //   const isNearBottom = distanceFromBottom < 250;
+
+  //   if (lastMessage.senderId === getUid() || isNearBottom) {
+  //     el.scrollTo({
+  //       top: el.scrollHeight,
+  //     });
+  //   }
+  // }, [messages]);
+
+  return (
+    <div className="flex flex-col flex-1 min-h-0">
+      {socket.connectionLost && (
+        <div className="bg-red-800 border border-red-800 text-center text-neutral-100 p-1 rounded-md">
+          Connection lost. Retrying... ({socket.failedCount} attempts)
+        </div>
+      )}
+
+      {allConversations.map((conversation) => {
+        return <div key={conversation.id}>{conversation.name}</div>;
+      })}
+
+      {allConversations.length > 0 && (
+        <MessagePanel
+          conversation={
+            allConversations.find(
+              (conversation) =>
+                conversation.id === "660e8400-e29b-41d4-a716-446655440000",
+            )!
+          }
+        />
+      )}
+    </div>
+  );
+}
+
+function MessagePanel({
+  conversation,
+}: {
+  conversation: {
+    id: string;
+    lastMessageId: string;
+    name: string;
+    createdAt: string;
+  };
+}) {
+  const conversationId = conversation.id;
+
+  const socket = useSocket();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const forceScrollAfterFetchRef = useRef(false);
+
+  const [uid, setUid] = useState<string | null>(null);
+  const [conversationMembers, setConversationMembers] = useState<
+    { id: string; name: string; lastReadAt: string }[]
+  >([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [content, setContent] = useState("");
+  const [onlineUids, setOnlineUids] = useState<string[]>([]);
+
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   useEffect(() => {
-    if (!myId) return;
+    if (!forceScrollAfterFetchRef.current) return;
 
-    async function fetchMessages(id1: string, id2: string) {
-      console.log("FETCHING");
+    requestAnimationFrame(() => {
+      scrollRef.current?.scrollTo({
+        top: scrollRef.current.scrollHeight,
+      });
 
-      const params = new URLSearchParams();
-      params.append("id1", id1);
-      params.append("id2", id2);
+      forceScrollAfterFetchRef.current = false;
+    });
+  }, [messages, conversationId]);
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setUid(getUid());
+  }, []);
+
+  function parseMessageDate(createdAt: string) {
+    const hasTimezone = /Z|[+-]\d{2}:\d{2}$/.test(createdAt);
+
+    return new Date(hasTimezone ? createdAt : `${createdAt}Z`);
+  }
+
+  function handleSubmit(e: SubmitEvent) {
+    e.preventDefault();
+
+    if (!content.trim()) return;
+
+    socket.sendMessage(conversationId, content);
+    setContent("");
+  }
+
+  useEffect(() => {
+    if (!uid) return;
+
+    async function getConversationMembers() {
       const response = await fetch(
-        `http://${window.location.hostname}:8080/api/messages?${params}`,
-        { method: "GET" },
+        `http://${window.location.hostname}:8080/api/conversation/${conversationId}/members`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${uid}`,
+          },
+        },
+      );
+
+      if (!response.ok) {
+        return;
+      }
+
+      const data = await response.json();
+      setConversationMembers(data);
+    }
+
+    async function fetchMessages() {
+      const response = await fetch(
+        `http://${window.location.hostname}:8080/api/conversation/${conversationId}/messages`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${getUid()}`,
+          },
+        },
       );
 
       if (!response.ok) {
@@ -117,51 +297,54 @@ export default function Page() {
       setMessages(messages);
     }
 
-    fetchMessages(myId, receiverId);
+    getConversationMembers();
+    fetchMessages();
 
-    const cleanup = onOpen(() => {
-      fetchMessages(myId, receiverId);
-      queryOnlineStatus([receiverId]);
+    const cleanupSocket3 = socket.onMessage((message: ChatMessage) => {
+      if (message.conversationId !== conversationId) return;
+      setMessages((prev) => [...prev, message]);
     });
 
-    return cleanup;
-  }, [myId, receiverId]);
-
-  useEffect(() => {
-    if (!forceScrollAfterFetchRef.current) return;
-
-    requestAnimationFrame(() => {
-      scrollRef.current?.scrollTo({
-        top: scrollRef.current.scrollHeight,
-      });
-
-      forceScrollAfterFetchRef.current = false;
+    const cleanupSocket2 = socket.onOpen(() => {
+      getConversationMembers();
+      fetchMessages();
     });
-  }, [messages]);
 
-  function handleSubmit(e: SubmitEvent) {
-    e.preventDefault();
+    const cleanupSocket = socket.onOnlineStatus(
+      ({
+        statuses,
+        conversationId: responseConversationId,
+      }: {
+        statuses: { userId: string; online: boolean }[];
+        conversationId: string;
+      }) => {
+        if (responseConversationId !== conversationId) return;
 
-    if (!content.trim()) return;
+        const trueOnlienUids = statuses
+          .filter((status) => status.online)
+          .map((status) => status.userId);
+        setOnlineUids(trueOnlienUids);
+      },
+    );
 
-    sendMessage(receiverId, content);
-    setContent("");
-  }
+    return () => {
+      cleanupSocket();
+      cleanupSocket2();
+      cleanupSocket3();
+    };
+  }, [conversationId, socket, uid]);
 
   useEffect(() => {
-    if (!myId) return;
-    queryOnlineStatus([receiverId]);
+    socket.queryOnlineStatus(conversationId);
 
     const requeryUserStatus = setInterval(() => {
-      queryOnlineStatus([receiverId]);
-    }, 5000);
+      socket.queryOnlineStatus(conversationId);
+    }, 2500);
 
-    return () => clearInterval(requeryUserStatus);
-  }, [receiverId, myId]);
-
-  const onlineUsers = new Map(
-    onlineUUIDs.map((user) => [user.receiverId, user.online]),
-  );
+    return () => {
+      clearInterval(requeryUserStatus);
+    };
+  }, [conversationId, conversationMembers, socket]);
 
   useEffect(() => {
     const lastMessage = messages.at(-1);
@@ -174,59 +357,53 @@ export default function Page() {
 
     const isNearBottom = distanceFromBottom < 250;
 
-    if (lastMessage.senderId === myId || isNearBottom) {
+    if (lastMessage.senderId === getUid() || isNearBottom) {
       el.scrollTo({
         top: el.scrollHeight,
       });
     }
-  }, [messages, myId]);
+  }, [messages]);
 
-  function parseMessageDate(createdAt: string) {
-    const hasTimezone = /Z|[+-]\d{2}:\d{2}$/.test(createdAt);
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString());
+    const old = params.get("conversationId");
+    if (old === conversationId) return;
+    params.set("conversationId", conversationId);
+    router.replace(`${pathname}?${params.toString()}`);
+  }, [conversationId, pathname, router, searchParams]);
 
-    return new Date(hasTimezone ? createdAt : `${createdAt}Z`);
-  }
-
+  if (!uid) return;
   return (
-    <div className="flex flex-col flex-1 min-h-0">
-      <div className="flex gap-2">
-        {previousMessaged.map((item: string) => {
-          return (
-            <Link
-              href={`/messages?receiverId=${item}`}
-              className="px-2 bg-neutral-300 rounded-md text-neutral-700"
-              key={item}
-            >
-              {item}
-            </Link>
-          );
-        })}
-      </div>
+    <div className="flex gap-2 min-h-0">
       <div className="max-w-3xl w-full mx-auto flex flex-col flex-1 min-h-0 py-20">
-        {connectionLost && (
-          <div className="bg-red-800 border border-red-800 text-center text-neutral-100 p-1 rounded-md">
-            Connection lost. Retrying... ({failedCount} attempts)
-          </div>
-        )}
-
-        <p className="text-sm text-neutral-500">Your ID</p>
-        <p className="font-mono break-all">{myId}</p>
-        <div className="flex items-center gap-1">
-          {onlineUsers && (
-            <div
-              className={clsx("w-4 h-4 rounded-full", {
-                "bg-green-500": onlineUsers.get(receiverId),
-                "bg-red-500": !onlineUsers.get(receiverId),
-              })}
-            />
-          )}
-          {onlineUUIDs.map((item) => {
+        <div className="bg-black p-4 text-white rounded-lg">
+          {conversation.name}
+        </div>
+        <div className="mr-2 ml-auto">
+          {onlineUids &&
+            conversationMembers.map((member) => (
+              <div key={member.id} className="flex gap-1 items-center">
+                <div
+                  className={clsx("w-4 h-4 rounded-full", {
+                    "bg-green-500": onlineUids.includes(member.id),
+                    "bg-red-500": !onlineUids.includes(member.id),
+                  })}
+                />
+                <p>{member.id === uid ? "You" : member.name}</p>
+              </div>
+            ))}
+          {/* {onlineUUIDs.map((item) => {
             return <p key={item.receiverId}>{item.receiverId}</p>;
-          })}
+          })} */}
         </div>
 
         <div ref={scrollRef} className="flex-1 min-h-0 p-2 overflow-y-scroll">
           <div className="min-h-full flex flex-col justify-end space-y-px">
+            {messages.length === 0 && (
+              <p className="text-sm text-neutral-500 text-center">
+                Start the conversation by sending a message.
+              </p>
+            )}
             {messages.map((message, index) => {
               const previousMessage = messages[index - 1];
               const nextMessage = messages[index + 1];
@@ -239,7 +416,7 @@ export default function Page() {
                 ? parseMessageDate(nextMessage.createdAt)
                 : null;
 
-              const isMine = message.senderId === myId;
+              const isMine = message.senderId === uid;
 
               const sameMinuteAsPrevious =
                 previousDate &&
@@ -310,7 +487,11 @@ export default function Page() {
                         })}
                       >
                         <p className="text-xs text-neutral-500 mb-px">
-                          {message.senderId}
+                          {
+                            conversationMembers.find(
+                              (member) => member.id === message.senderId,
+                            )?.name
+                          }
                         </p>
                       </div>
                     )}
@@ -328,6 +509,7 @@ export default function Page() {
                           "rounded-tl-none": !isMine && !isFirstInGroup,
                           "rounded-bl-none":
                             !isMine && (!isLastInGroup || isFirstInGroup),
+                          "mb-2": isLastInGroup,
                         },
                         "rounded-md px-4 py-2 max-w-xl w-fit",
                       )}
@@ -341,9 +523,9 @@ export default function Page() {
           </div>
         </div>
 
-        {!instantHideTyping && (
+        {!false && (
           <AnimatePresence>
-            {otherTyping && (
+            {false && (
               <motion.div
                 className="flex items-center gap-px"
                 initial={{ opacity: 0 }}
@@ -363,7 +545,7 @@ export default function Page() {
                 <div className="w-2 h-2 bg-neutral-600 rounded-full animate-bounce [animation-delay:150ms]" />
                 <div className="w-2 h-2 bg-neutral-600 rounded-full animate-bounce [animation-delay:300ms]" />
                 <p className="text-sm ml-2 text-neutral-600">
-                  {receiverId} is typing...
+                  {conversationId} is typing...
                 </p>
               </motion.div>
             )}
@@ -376,8 +558,6 @@ export default function Page() {
               value={content}
               onChange={(e) => {
                 setContent(e.target.value);
-                setInstantHideTyping(false);
-                sendTyping(receiverId);
               }}
               placeholder="Message"
               className="border rounded-md px-3 py-2 flex-1"

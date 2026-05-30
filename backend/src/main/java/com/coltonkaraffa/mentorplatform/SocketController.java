@@ -20,7 +20,9 @@ import java.net.URI;
 import java.sql.SQLException;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -31,40 +33,62 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 record SendMessageRequest(
-    String senderId,
-    String receiverId,
+    String conversationId,
     String content,
     String type
 ) {}
 
 record OnlineStatusRequest(
     String type,
-    String[] userIds
+    String conversationId
+) {}
+
+record TypingRequest(
+    String conversationId,
+    String type
+) {}
+
+record ReadRequest(
+    String conversationId,
+    String type
+) {}
+
+record ConversationCreatedRequest(
+    String conversationId,
+    String type
 ) {}
 
 record ChatMessage(
     String id,
-    String type,
     String senderId,
-    String receiverId,
+    String conversationId,
     String content,
-    String createdAt
+    String createdAt,
+    String type
 ) {}
 
 record TypeStatus(
-    String type,
     String senderId,
-    String createdAt
+    String createdAt,
+    String type
 ) {}
 
 record UserStatus(
-    String receiverId,
+    String userId,
     boolean online
 ) {}
 
 record OnlineStatusResponse(
+    UserStatus[] statuses,
     String type,
-    UserStatus[] userIds
+    String conversationId
+) {}
+
+record ConversationCreatedResponse(
+    String conversationId,
+    String createdBy,
+    String createdAt,
+    String type
 ) {}
 
 @Configuration
@@ -205,17 +229,27 @@ public class SocketController implements WebSocketConfigurer {
                             SendMessageRequest.class
                         );
 
-                        handleChat(request);
+                        handleChat(session, request);
                         break;
                     }
-                    case "TYPING": {
-                        SendMessageRequest request =
+                    case "SEND_TYPING": {
+                        TypingRequest request =
                         objectMapper.treeToValue(
                             node,
-                            SendMessageRequest.class
+                            TypingRequest.class
                         );
 
-                        handleType(request);
+                        handleType(session, request);
+                        break;
+                    }
+                    case "SEND_READ": {
+                        ReadRequest request =
+                        objectMapper.treeToValue(
+                            node,
+                            ReadRequest.class
+                        );
+
+                        handleRead(session, request);
                         break;
                     }
                     case "GET_ONLINE_STATUS": {
@@ -228,86 +262,176 @@ public class SocketController implements WebSocketConfigurer {
                         handleOnlineStatus(session, request);
                         break;
                     }
+                    case "CONVERSATION_CREATED": {
+                        ConversationCreatedRequest request =
+                        objectMapper.treeToValue(
+                            node,
+                            ConversationCreatedRequest.class
+                        );
+
+                        handleConversationCreated(session, request);
+                        break;
+                    }
+                }
+            }
+
+            private void broadcastToConversationExceptSender(
+                String conversationId,
+                String senderId,
+                String payload
+            ) throws IOException, SQLException {
+                Set<String> memberIds = userRepository.getConversationMemberIds(conversationId);
+
+                for (String memberId : memberIds) {
+                    if (memberId.equals(senderId)) continue;
+
+                    Set<WebSocketSession> sessions = sessionsByUserId.get(memberId);
+                    if (sessions == null) continue;
+
+                    for (WebSocketSession session : sessions) {
+                        if (session.isOpen()) {
+                            session.sendMessage(new TextMessage(payload));
+                        }
+                    }
+                }
+            }
+
+            private void handleConversationCreated(
+                WebSocketSession session,
+                ConversationCreatedRequest request
+            ) throws IOException, SQLException {
+                String senderId = getQueryParam(session.getUri(), "userId");
+
+                var response = new ConversationCreatedResponse(
+                    request.conversationId(),
+                    senderId,
+                    Instant.now().toString(),
+                    "CONVERSATION_CREATED"
+                );
+
+                String payload = objectMapper.writeValueAsString(response);
+
+                Set<String> memberIds = userRepository.getConversationMemberIds(
+                    request.conversationId()
+                );
+
+                for (String memberId : memberIds) {
+                    Set<WebSocketSession> sessions = sessionsByUserId.get(memberId);
+                    if (sessions == null) continue;
+
+                    for (WebSocketSession session_ : sessions) {
+                        if (session_.isOpen()) {
+                            session_.sendMessage(new TextMessage(payload));
+                        }
+                    }
                 }
             }
 
             private void handleOnlineStatus(
-                WebSocketSession requester,
+                WebSocketSession session,
                 OnlineStatusRequest request
-            ) throws IOException {
+            ) throws IOException, SQLException {
+                Set<String> userIds = userRepository.getConversationMemberIds(request.conversationId());
 
-                UserStatus[] statuses =
-                    Arrays.stream(request.userIds())
-                        .map(userId ->
-                            new UserStatus(
-                                userId,
-                                isUserOnline(userId)
-                            )
+                List<UserStatus> statuses = new ArrayList<>();
+                
+                for (String userId : userIds) {
+                    statuses.add(
+                        new UserStatus(
+                            userId,
+                            isUserOnline(userId)
                         )
-                        .toArray(UserStatus[]::new);
+                    );
+                }
+
+                UserStatus[] result = statuses.toArray(UserStatus[]::new);
 
                 var response = new OnlineStatusResponse(
+                    result,
                     "ONLINE_STATUS",
-                    statuses
+                    request.conversationId()
                 );
 
-                requester.sendMessage(
+                session.sendMessage(
                     new TextMessage(
                         objectMapper.writeValueAsString(response)
                     )
                 );
             }
+
+            private void handleRead(WebSocketSession session, ReadRequest request) throws IOException, SQLException {
+                String senderId = getQueryParam(session.getUri(), "userId");
+
+                userRepository.markConversationRead(
+                    request.conversationId(),
+                    senderId
+                );
+
+                var response = Map.of(
+                    "type", "MESSAGE_READ",
+                    "conversationId", request.conversationId(),
+                    "readerId", senderId,
+                    "readAt", Instant.now().toString()
+                );
+
+                broadcastToConversationExceptSender(
+                    request.conversationId(),
+                    senderId,
+                    objectMapper.writeValueAsString(response)
+                );
+            }
             
-            private void handleType(SendMessageRequest request) throws JsonProcessingException, IOException {
-                Set<WebSocketSession> receiverSessions =
-                    sessionsByUserId.get(request.receiverId());
+            private void handleType(WebSocketSession session, TypingRequest request) throws IOException, SQLException {
+                String senderId = getQueryParam(session.getUri(), "userId");
 
-                var response = new TypeStatus("SHOW_TYPING", request.receiverId(), Instant.now().toString());
+                var response = new TypeStatus(
+                    senderId,
+                    Instant.now().toString(),
+                    "SHOW_TYPING"
+                );
 
-                if (receiverSessions != null) {
-                    for (WebSocketSession session : receiverSessions) {
-                        if (session.isOpen()) {
-                            session.sendMessage(new TextMessage(objectMapper.writeValueAsString(response)));
-                        }
-                    }
-                }
+                broadcastToConversationExceptSender(
+                    request.conversationId(),
+                    senderId,
+                    objectMapper.writeValueAsString(response)
+                );
             }
 
-            private void handleChat(SendMessageRequest request) throws IOException, SQLException {
+            private void handleChat(WebSocketSession session, SendMessageRequest request) throws IOException, SQLException {
+                String senderId = getQueryParam(session.getUri(), "userId");
+
                 ChatMessage chatMessage = new ChatMessage(
                     UUID.randomUUID().toString(),
-                    "MESSAGE_RECEIVED",
-                    request.senderId(),
-                    request.receiverId(),
+                    senderId,
+                    request.conversationId(),
                     request.content(),
-                    Instant.now().toString()
+                    Instant.now().toString(),
+                    "MESSAGE_RECEIVED"
+                );
+
+                userRepository.insertMessage(
+                    senderId,
+                    request.conversationId(),
+                    request.content()
                 );
 
                 String payload = objectMapper.writeValueAsString(chatMessage);
 
-                Set<WebSocketSession> receiverSessions =
-                    sessionsByUserId.get(request.receiverId());
+                Set<String> memberIds = userRepository.getConversationMemberIds(
+                    request.conversationId()
+                );
 
-                if (receiverSessions != null) {
-                    for (WebSocketSession session : receiverSessions) {
-                        if (session.isOpen()) {
-                            session.sendMessage(new TextMessage(payload));
+                for (String memberId : memberIds) {
+                    Set<WebSocketSession> sessions = sessionsByUserId.get(memberId);
+
+                    if (sessions == null) continue;
+
+                    for (WebSocketSession session_ : sessions) {
+                        if (session_.isOpen()) {
+                            session_.sendMessage(new TextMessage(payload));
                         }
                     }
                 }
-
-                Set<WebSocketSession> senderSessions =
-                    sessionsByUserId.get(request.senderId());
-
-                if (senderSessions != null) {
-                    for (WebSocketSession session : senderSessions) {
-                        if (session.isOpen()) {
-                            session.sendMessage(new TextMessage(payload));
-                        }
-                    }
-                }
-
-                userRepository.insertMessage(request.senderId(), request.receiverId(), request.content());
             }
 
             private boolean isUserOnline(String userId) {

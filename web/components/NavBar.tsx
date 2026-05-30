@@ -23,7 +23,7 @@ export default function NavBar() {
 
         <div className="flex items-center space-x-4">
           <Link
-            href="/about"
+            href="/login"
             className="border border-white rounded-lg px-4 py-1"
           >
             Login

@@ -11,10 +11,9 @@ import lombok.NoArgsConstructor;
 @Data
 @AllArgsConstructor
 @NoArgsConstructor
-public class Message {
+public class Conversation {
     String id = UUID.randomUUID().toString();
-    String senderId;
-    String conversationId;
-    String body;
+    String name;
+    String lastMessageId;
     String createdAt;
 }

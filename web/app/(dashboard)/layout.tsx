@@ -21,6 +21,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${geistSans.variable}  h-full antialiased`}>
+      <head>
+        <link rel="preload" href="/notification.wav" as="audio" />
+      </head>
       <SocketProvider>
         <body className="h-dvh flex flex-col">
           <MessageNotification />

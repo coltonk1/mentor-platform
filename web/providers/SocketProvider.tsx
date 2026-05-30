@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use client";
 
 import {
@@ -9,69 +10,70 @@ import {
   useRef,
   useState,
 } from "react";
-import { nanoid } from "nanoid";
+import { getUid } from "@/lib/auth";
 
 export type ChatMessage = {
   id: string;
   senderId: string;
-  receiverId: string;
+  conversationId: string;
   content: string;
   createdAt: string;
 };
 
 type SocketContextType = {
-  myId: string | null;
   connectionLost: boolean;
   failedCount: number;
-  otherTyping: boolean;
-  instantHideTyping: boolean;
-  setInstantHideTyping: (value: boolean) => void;
-  sendMessage: (receiverId: string, content: string) => void;
-  sendTyping: (receiverId: string) => void;
-  queryOnlineStatus: (userIdsToCheck: string[]) => void;
-  onlineUUIDs: { receiverId: string; online: boolean }[];
+
+  sendMessage: (conversationId: string, content: string) => void;
+  sendTyping: (conversationId: string) => void;
+  sendReadReceipt: (conversationId: string) => void;
+
+  queryOnlineStatus: (conversationId: string) => void;
+
   onMessage: (callback: (message: ChatMessage) => void) => () => void;
+  onTyping: (callback: (data: any) => void) => () => void;
+  onReadReceipt: (callback: (data: any) => void) => () => void;
+  onOnlineStatus: (callback: (data: any) => void) => () => void;
+  onConversationCreated: (callback: (data: any) => void) => () => void;
   onOpen: (callback: () => void) => () => void;
+
   socketRef: RefObject<WebSocket | null>;
 };
 
 const SocketContext = createContext<SocketContextType | null>(null);
 
 export function SocketProvider({ children }: { children: ReactNode }) {
-  const [myId, setMyId] = useState<string | null>(null);
   const [connectionLost, setConnectionLost] = useState(false);
   const [failedCount, setFailedCount] = useState(0);
-  const [otherTyping, setOtherTyping] = useState(false);
-  const [onlineUUIDs, setOnlineUUIDs] = useState([]);
-
-  const [instantHideTyping, setInstantHideTyping] = useState(false);
 
   const socketRef = useRef<WebSocket | null>(null);
   const shouldReconnect = useRef(true);
   const reconnectTimeout = useRef<NodeJS.Timeout | null>(null);
-  const removeOtherTyping = useRef<NodeJS.Timeout | null>(null);
+
+  const openListenersRef = useRef<Set<() => void>>(new Set());
+  const messageListenersRef = useRef<Set<(message: ChatMessage) => void>>(
+    new Set(),
+  );
+  const typingListenersRef = useRef<Set<(data: unknown) => void>>(new Set());
+  const readReceiptListenersRef = useRef<Set<(data: unknown) => void>>(
+    new Set(),
+  );
+  const onlineStatusListenersRef = useRef<Set<(data: unknown) => void>>(
+    new Set(),
+  );
+  const conversationListenersRef = useRef<Set<(data: unknown) => void>>(
+    new Set(),
+  );
 
   useEffect(() => {
-    let id = nanoid();
-    const storageId = sessionStorage.getItem("id");
-    if (storageId !== null) {
-      id = storageId;
-    } else {
-      sessionStorage.setItem("id", id);
-    }
-
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setMyId(id);
-  }, []);
-
-  useEffect(() => {
-    if (!myId) return;
+    if (!getUid()) return;
 
     function connect() {
-      if (!shouldReconnect.current || !myId) return;
+      if (!shouldReconnect.current || !getUid()) return;
 
+      // TODO: Add authorization to websocket
       const socket = new WebSocket(
-        `ws://${window.location.hostname}:8080/ws?userId=${myId}`,
+        `ws://${window.location.hostname}:8080/ws?userId=${getUid()}`,
       );
 
       const connectionTimeout = setTimeout(() => {
@@ -86,9 +88,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         setConnectionLost(false);
         setFailedCount(0);
 
-        openListenersRef.current.forEach((callback) => {
-          callback();
-        });
+        openListenersRef.current.forEach((cb) => cb());
       };
 
       socket.onerror = (error) => {
@@ -113,38 +113,25 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         const data = JSON.parse(event.data);
 
         switch (data.type) {
-          case "SHOW_TYPING":
-            setOtherTyping(true);
-            setInstantHideTyping(false);
-
-            if (removeOtherTyping.current) {
-              clearTimeout(removeOtherTyping.current);
-            }
-
-            removeOtherTyping.current = setTimeout(() => {
-              setOtherTyping(false);
-            }, 5000);
-
+          case "START_TYPING":
+            typingListenersRef.current.forEach((cb) => cb(data));
             break;
 
           case "MESSAGE_RECEIVED":
-            setInstantHideTyping(true);
-            setOtherTyping(false);
+            messageListenersRef.current.forEach((cb) => cb(data));
+            break;
 
-            messageListenersRef.current.forEach((callback) => {
-              callback(data);
-            });
-            // setMessages((prev) => [...prev, data]);
-
-            // if (removeOtherTyping.current) {
-            //   clearTimeout(removeOtherTyping.current);
-            // }
-
+          case "MESSAGE_READ":
+            readReceiptListenersRef.current.forEach((cb) => cb(data));
             break;
 
           case "ONLINE_STATUS":
-            console.log(data);
-            setOnlineUUIDs(data["userIds"]);
+            onlineStatusListenersRef.current.forEach((cb) => cb(data));
+            break;
+
+          case "CONVERSATION_CREATED":
+            conversationListenersRef.current.forEach((cb) => cb(data));
+            break;
         }
       };
 
@@ -161,15 +148,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         clearTimeout(reconnectTimeout.current);
       }
 
-      if (removeOtherTyping.current) {
-        clearTimeout(removeOtherTyping.current);
-      }
-
       socketRef.current?.close();
     };
-  }, [myId]);
-
-  const openListenersRef = useRef<Set<() => void>>(new Set());
+  }, []);
 
   function onOpen(callback: () => void) {
     openListenersRef.current.add(callback);
@@ -179,10 +160,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     };
   }
 
-  const messageListenersRef = useRef<Set<(message: ChatMessage) => void>>(
-    new Set(),
-  );
-
   function onMessage(callback: (message: ChatMessage) => void) {
     messageListenersRef.current.add(callback);
 
@@ -191,38 +168,60 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     };
   }
 
-  function sendMessage(receiverId: string, content: string) {
-    if (!myId || !content.trim()) return;
+  function onTyping(callback: (data: any) => void) {
+    typingListenersRef.current.add(callback);
+    return () => typingListenersRef.current.delete(callback);
+  }
 
+  function onReadReceipt(callback: (data: any) => void) {
+    readReceiptListenersRef.current.add(callback);
+    return () => readReceiptListenersRef.current.delete(callback);
+  }
+
+  function onOnlineStatus(callback: (data: any) => void) {
+    onlineStatusListenersRef.current.add(callback);
+    return () => onlineStatusListenersRef.current.delete(callback);
+  }
+
+  function onConversationCreated(callback: (data: any) => void) {
+    conversationListenersRef.current.add(callback);
+    return () => conversationListenersRef.current.delete(callback);
+  }
+
+  function sendMessage(conversationId: string, content: string) {
+    if (!content.trim()) return;
     socketRef.current?.send(
       JSON.stringify({
-        senderId: myId,
-        receiverId,
+        conversationId: conversationId,
         content,
         type: "SEND_MESSAGE",
       }),
     );
   }
 
-  function sendTyping(receiverId: string) {
-    if (!myId) return;
-
+  function sendReadReceipt(conversationId: string) {
     socketRef.current?.send(
       JSON.stringify({
-        senderId: myId,
-        receiverId,
-        type: "TYPING",
+        conversationId: conversationId,
+        type: "SEND_READ",
       }),
     );
   }
 
-  function queryOnlineStatus(userIdsToCheck: string[]) {
-    if (!myId || userIdsToCheck.length === 0) return;
+  function sendTyping(conversationId: string) {
+    socketRef.current?.send(
+      JSON.stringify({
+        conversationId,
+        type: "SEND_TYPING",
+      }),
+    );
+  }
 
+  function queryOnlineStatus(conversationId: string) {
     socketRef.current?.send(
       JSON.stringify({
         type: "GET_ONLINE_STATUS",
-        userIds: userIdsToCheck,
+        conversationId: conversationId,
       }),
     );
   }
@@ -230,18 +229,22 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   return (
     <SocketContext.Provider
       value={{
-        myId,
         connectionLost,
         failedCount,
-        otherTyping,
-        instantHideTyping,
-        setInstantHideTyping,
+
         sendMessage,
         sendTyping,
+        sendReadReceipt,
+
         queryOnlineStatus,
-        onlineUUIDs,
+
         onMessage,
         onOpen,
+        onOnlineStatus,
+        onTyping,
+        onReadReceipt,
+        onConversationCreated,
+
         socketRef,
       }}
     >
